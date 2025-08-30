@@ -11,13 +11,12 @@ import ReportFab from "../components/ReportFab";
 import alertIcon from "../assets/alert.svg";
 import routeIcon from "../assets/route.svg";
 import insightIcon from "../assets/insight.svg";
-import { computeRiskLevel } from "../lib/RiskMatrix";
 
-type RiskText = "LOW" | "MED" | "HIGH";
+type RiskText = "Low Risk" | "Medium Risk" | "High Risk";
 type RiskResponse = {
   ok: boolean;
-  risk?: number;
-  riskText?: "Low Risk" | "Medium Risk" | "High Risk";
+  risk: number;
+  riskText: RiskText;
   address?: string;
   lat?: number;
   lon?: number;
@@ -40,13 +39,14 @@ const FALLBACK = { lat: -37.8136, lon: 144.9631 }; // Melbourne CBD
 
 // === 小工具：天氣告警寫入/移除（會被 alertsService 合併進托盤）===
 type WeatherAlert = {
-  clusterId: string;
+  clusterId: string;               // e.g. weather#-37.814_144.963
   incidentType: "severe_weather";
-  description: string;
+  description: string;             // 右側主體文字（不含地址）
   severity: "low" | "medium" | "high";
-  expiresAt: number;
-  ackable: false;
-  photoUrls?: string[];
+  expiresAt: number;               // epoch seconds
+  ackable: false;                  // 不允許打勾
+  photoUrls?: string[];            // 明確給空陣列，避免載圖
+  // ⭐ 給 AlertTray 的右上角顯示
   address?: string;
   agoText?: string;
 };
@@ -64,6 +64,7 @@ function upsertWeatherAlert(a: WeatherAlert) {
   const idx = list.findIndex((x) => x.clusterId === a.clusterId);
   if (idx === -1) list.push(a); else list[idx] = a;
   localStorage.setItem("cs.weather.alerts", JSON.stringify(list));
+  // 提醒 alertsService 立刻重抓並合併
   window.dispatchEvent(new CustomEvent("cs:weather:list"));
 }
 
@@ -75,29 +76,12 @@ function removeWeatherAlert(clusterId: string) {
   window.dispatchEvent(new CustomEvent("cs:weather:list"));
 }
 
-/* ===== weather helpers for chip ===== */
-function weatherLabelFrom(weather?: RiskResponse["weather"]) {
-  const ws = Number(weather?.windSpeed ?? 0);
-  const pr = Number(weather?.precipitation ?? 0);
-  if (pr >= 1) return "Rainy";
-  if (ws >= 12) return "Windy";
-  return "Clear";
-}
-function weatherEmoji(text: string) {
-  const t = text.toLowerCase();
-  if (t.includes("rain")) return "🌧️";
-  if (t.includes("wind")) return "🌬️";
-  if (t.includes("fog") || t.includes("mist")) return "🌫️";
-  if (t.includes("cloud")) return "⛅️";
-  return "☀️";
-}
-
 export default function Home() {
   // ===== 顯示用狀態 =====
-  const [riskTextOnly, setRiskTextOnly] = useState<RiskText>("LOW");
+  const [riskLevel, setRiskLevel] = useState<number>(0);
+  const [riskText, setRiskText] = useState<RiskText>("Low Risk");
   const [address, setAddress] = useState<string>("");
   const [alertCount, setAlertCount] = useState<number>(0);
-  const [weatherText, setWeatherText] = useState<string>(""); // 👈 for emoji chip
 
   // 對話框開關
   const [geoOpen, setGeoOpen] = useState<boolean>(false);
@@ -124,15 +108,17 @@ export default function Home() {
 
   // 依風險產生/更新本地天氣告警（供鈴鐺顯示）
   const publishWeatherFromRisk = useCallback(
-    (rt: "Low Risk" | "Medium Risk" | "High Risk", addr: string, lat: number, lon: number, weather?: RiskResponse["weather"]) => {
+    (rt: RiskText, addr: string, lat: number, lon: number, weather?: RiskResponse["weather"]) => {
       const cell = roundCell(lat, lon, 3);
       const clusterId = `weather#${cell}`;
 
+      // 低風險 → 移除
       if (rt === "Low Risk") {
         removeWeatherAlert(clusterId);
         return;
       }
 
+      // 文案（可帶上 API 回來的數字）
       const wind = weather?.windSpeed != null ? `~${Math.round(Number(weather.windSpeed))} m/s` : undefined;
       const rain = weather?.precipitation != null ? `${Number(weather.precipitation).toFixed(1)} mm/h` : undefined;
       const details = [wind && `winds (${wind})`, rain && `rain (${rain})`].filter(Boolean).join(" or ");
@@ -160,7 +146,7 @@ export default function Home() {
     []
   );
 
-  // 抓風險 + 地址 + 計算本地矩陣（→ 也同步 weather chip）
+  // 抓風險 + 地址
   const fetchRisk = useCallback(
     async (lat: number, lon: number) => {
       try {
@@ -168,37 +154,21 @@ export default function Home() {
         url.searchParams.set("lat", String(lat));
         url.searchParams.set("lon", String(lon));
         const res = await fetch(url.toString(), { cache: "no-store" });
-        const data: RiskResponse = await res.json().catch(() => ({} as RiskResponse));
+        const data: RiskResponse = await res.json();
 
         const addr = data.address || `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        setRiskLevel(Math.round(data.risk || 0));
+        setRiskText(data.riskText || "Low Risk");
         setAddress(addr);
         broadcastAddressAndCoords(addr, lat, lon);
 
-        const wxCode: 1|2|7 = Number(data.weather?.windSpeed ?? 0) >= 12 ? 7 :
-                               Number(data.weather?.precipitation ?? 0) >= 1 ? 2 : 1;
-        const now = new Date();
-        const result = computeRiskLevel({
-          lat, lon,
-          hour: now.getHours(),
-          month: now.getMonth() + 1,
-          dow: now.getDay(),
-          weatherCode: wxCode
-        });
-
-        setRiskTextOnly(result.riskLevel);
-        setWeatherText(weatherLabelFrom(data.weather)); // 👈 update chip
-
-        publishWeatherFromRisk(
-          result.riskLevel === "HIGH" ? "High Risk" : result.riskLevel === "MED" ? "Medium Risk" : "Low Risk",
-          addr, lat, lon, data.weather
-        );
+        // ⭐ 天氣同步到鈴鐺
+        publishWeatherFromRisk(data.riskText || "Low Risk", addr, lat, lon, data.weather);
       } catch (e) {
         console.error("fetch risk failed:", e);
         const addr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
         setAddress(addr);
         broadcastAddressAndCoords(addr, lat, lon);
-        setRiskTextOnly("LOW");
-        setWeatherText("");
       }
     },
     [broadcastAddressAndCoords, publishWeatherFromRisk]
@@ -253,12 +223,14 @@ export default function Home() {
     })();
   }, [fetchRisk, trySilentGeolocation]);
 
+  // ===== 接收 Header 的「Change」事件，打開 GeoPrompt =====
   useEffect(() => {
     const onPrompt = () => setGeoOpen(true);
     window.addEventListener("cs:prompt-geo", onPrompt);
     return () => window.removeEventListener("cs:prompt-geo", onPrompt);
   }, []);
 
+  // ===== 回到分頁才提醒／或靜默更新 =====
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") {
@@ -274,6 +246,7 @@ export default function Home() {
     };
   }, [trySilentGeolocation]);
 
+  // ===== 每分鐘檢查一次是否到提示間隔 =====
   useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState !== "visible") return;
@@ -305,35 +278,17 @@ export default function Home() {
     markPromptedNow();
   };
 
-  const weatherChip = weatherText ? (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 12,
-        padding: "2px 8px",
-        borderRadius: 999,
-        border: "1px solid rgba(0,0,0,.08)",
-        background: "rgba(255,255,255,.6)",
-        backdropFilter: "blur(2px)"
-      }}
-    >
-      <span>{weatherEmoji(weatherText)}</span>
-      <span style={{ opacity: 0.9 }}>{weatherText}</span>
-    </div>
-  ) : null;
-
   return (
     <main className="container has-fab">
       <GeoPrompt open={geoOpen} onGotCoords={onGotCoords} onClose={onClosePrompt} />
+
+      {/* 已移除地址段落，地址只在 Header 顯示 */}
 
       <section className="alert-card-wrapper">
         <RiskHeaderCard
           title="Safety Alerts"
           icon={<img src={alertIcon} alt="alert" />}
-          riskText={riskTextOnly}
-          weatherChip={weatherChip}   // 👈 show emoji + text
+          riskLevel={riskLevel}
         />
         <RiskBodyCard countOverride={alertCount} actionLink="/alerts" actionText="View Details">
           <Link to="/report" className="btn-outline">
@@ -349,8 +304,8 @@ export default function Home() {
         actionText="Plan Route"
         actionLink="/plan-route"
         links={[
-          { text: "Feature coming soon", className: "info" },
-          { text: "Stay tuned!", className: "purple" },
+          { text: "4 safe routes available", className: "success" },
+          { text: "🤖 AI-powered recommendations", className: "info" },
         ]}
       />
 
@@ -366,6 +321,7 @@ export default function Home() {
         ]}
       />
 
+      {/* 右下角小圓 FAB（行動/平板/桌機皆適配） */}
       <ReportFab />
     </main>
   );

@@ -5,14 +5,12 @@ import "./AlertCardWrapper.css";
 interface AlertCardWrapperProps {
   title: string;
   riskLevel: number;
-  riskText: "LOW" | "MED" | "MEDIUM" | "HIGH";
+  riskText: "Low Risk" | "Medium Risk" | "High Risk";
   details: string;
-  actionText?: string;
-  actionLink?: string;
+  actionText?: string;        // ✅ 可選
+  actionLink?: string;        // ✅ 可選
   icon?: React.ReactNode;
   children?: React.ReactNode;
-  /** Tiny chip above the status line – e.g. the weather emoji + text */
-  weatherChip?: React.ReactNode;
 }
 
 export default function AlertCardWrapper({
@@ -24,7 +22,6 @@ export default function AlertCardWrapper({
   actionLink,
   icon,
   children,
-  weatherChip,
 }: AlertCardWrapperProps) {
   return (
     <section className="alert-card-wrapper">
@@ -33,9 +30,13 @@ export default function AlertCardWrapper({
         riskLevel={riskLevel}
         riskText={riskText}
         icon={icon}
-        weatherChip={weatherChip}
       />
-      <RiskBodyCard details={details} actionText={actionText} actionLink={actionLink}>
+      {/* 直接把可選 props 往下傳；由子元件自行判斷是否渲染 */}
+      <RiskBodyCard
+        details={details}
+        actionText={actionText}
+        actionLink={actionLink}
+      >
         {children}
       </RiskBodyCard>
     </section>

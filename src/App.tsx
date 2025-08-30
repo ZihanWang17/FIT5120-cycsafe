@@ -7,8 +7,6 @@ import ReportIncident from "./pages/ReportIncident";
 import PlanRoutePage from "./pages/PlanRoutePage";
 import DataInsights from "./pages/DataInsights";
 import { startAlertsPolling, stopAlertsPolling } from "./services/alertsService";
-import { startLocationBus } from "./lib/locationBus";
-startLocationBus(); // begins 5s global coord updates
 
 export default function App() {
   // 啟動「Clusters + Weather」合併輪詢（寫入 cs.alerts.* 並廣播）

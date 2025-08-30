@@ -1,98 +1,61 @@
-/* Centralised network helpers + app APIs */
-
-export type Abortable = { signal?: AbortSignal };
-
-async function fetchJSON<T>(url: string, opts: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new DOMException("timeout", "AbortError")), opts.timeoutMs ?? 20000);
-  if (opts.signal) opts.signal.addEventListener("abort", () => controller.abort(opts.signal!.reason), { once: true });
-
-  try {
-    const res = await fetch(url, { ...opts, signal: controller.signal });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/* ===== VIC feeds (exposed if you want to reuse them elsewhere) ===== */
-type VicGeoJson = { type: "FeatureCollection"; features: any[] };
-
-export async function getVicEvents(signal?: AbortSignal) {
-  const url = "https://emergency.vic.gov.au/public/events-geojson.json";
-  try {
-    const j = await fetchJSON<VicGeoJson>(url, { timeoutMs: 20000, signal });
-    return Array.isArray(j?.features) ? j.features : [];
-  } catch (e: any) {
-    if (e?.name === "AbortError") return [];
-    throw e;
-  }
-}
-export async function getVicImpactAreas(signal?: AbortSignal) {
-  const url = "https://emergency.vic.gov.au/public/impact-areas-geojson.json";
-  try {
-    const j = await fetchJSON<VicGeoJson>(url, { timeoutMs: 20000, signal });
-    return Array.isArray(j?.features) ? j.features : [];
-  } catch (e: any) {
-    if (e?.name === "AbortError") return [];
-    throw e;
-  }
-}
-
-/* ===== Incidents (for ReportIncident & QuickReportModal) ===== */
-
+// src/lib/api.ts
 export type CreateIncidentPayload = {
   Timestamp: string;
   Incident_severity: "low" | "medium" | "high" | "critical";
   Incident_description: string;
-  Latitude?: number | null;
-  Longitude?: number | null;
+  Latitude?: number;
+  Longitude?: number;
   LGA?: string;
-  Verification: "pending" | "approved" | "rejected";
-  Picture?: string[];
-  Incident_type: string;
-  Incident_type_desc: string;
+  Verification?: "pending" | "verified" | "rejected";
+  Picture?: string[];               // S3 keys 或 URLs
+  Incident_type: string;            // 代碼，如 "ROAD_HAZARD"
+  Incident_type_desc?: string;      // 描述，如 "Road Hazard"
+  Contact?: string;                 // 可選，Email / Phone
 };
 
+// 從 .env 讀取
+const CREATE_URL = import.meta.env.VITE_API_CREATE_INCIDENT as string | undefined;
+const UPLOAD_URL = import.meta.env.VITE_API_UPLOAD_IMAGE as string | undefined;
+const BUCKET     = import.meta.env.VITE_UPLOAD_BUCKET as string | undefined;
+const PREFIX     = import.meta.env.VITE_UPLOAD_PREFIX as string | undefined;
+
+/** 建立事故事件 (呼叫 createIncident Lambda) */
 export async function createIncident(payload: CreateIncidentPayload) {
-  const res = await fetch("/api/incidents", {
+  if (!CREATE_URL) throw new Error("Missing VITE_API_CREATE_INCIDENT");
+
+  const res = await fetch(CREATE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error("Failed to create incident");
-  return res.json();
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.message || "Failed to create incident");
+  }
+  return data as { ok: true; INCIDENT_NO: string; Timestamp: string };
 }
 
-/** Minimal submit used by QuickReportModal */
-export async function submitIncident(payload: {
-  Incident_type: string;
-  latitude: number;
-  longitude: number;
-  description?: string;
-}) {
-  const res = await fetch("/api/incidents", {
+/** 取得 S3 上傳 URL（由 incidentImageUploadUrl Lambda 回傳） */
+export async function getUploadUrl(filename: string, contentType: string) {
+  if (!UPLOAD_URL) throw new Error("Missing VITE_API_UPLOAD_IMAGE");
+
+  const res = await fetch(UPLOAD_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      Incident_type: payload.Incident_type,
-      Incident_description: payload.description ?? "",
-      Latitude: payload.latitude,
-      Longitude: payload.longitude,
-      Timestamp: new Date().toISOString(),
-      Verification: "pending",
+      filename,
+      contentType,
+      bucket: BUCKET,
+      prefix: PREFIX,
     }),
   });
-  if (!res.ok) throw new Error("Failed to submit incident");
-  return res.json();
-}
 
-/** Pre-signed upload helper for photos */
-export async function getUploadUrl(filename: string, contentType = "image/jpeg") {
-  const res = await fetch(
-    `/api/uploads/presign?name=${encodeURIComponent(filename)}&type=${encodeURIComponent(contentType)}`
-  );
-  if (!res.ok) throw new Error("Failed to get upload URL");
-  return (await res.json()) as { url: string; key: string };
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.url || !data?.key) {
+    throw new Error(data?.message || "Failed to get upload URL");
+  }
+
+  // 例如 { ok:true, url: <signed PUT url>, key: "incidents/2025/0827/xxx.jpg" }
+  return data as { ok: true; url: string; key: string };
 }
