@@ -1,14 +1,18 @@
-import { useLocation } from "react-router-dom";
-import "./ReportFab.css";
-import reportFabIcon from "../assets/fab-report.svg";
+// Floating action button for quick incident reporting. When tapped it opens
+// the QuickReportSheet bottom sheet. Hidden on pages under "/report" to
+// avoid duplication.
+
 import { useState } from "react";
-import QuickReportModal from "./QuickReportModal";
+import { useLocation } from "react-router-dom";
+import QuickReportSheet from "./QuickReportSheet";
+import reportFabIcon from "../assets/fab-report.svg";
+import "./ReportFab.css";
 
 export default function ReportFab() {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
 
-  // 在完整回報頁就隱藏 FAB（以免重複）
+  // Hide the FAB when already on the full report page
   if (pathname.startsWith("/report")) return null;
 
   return (
@@ -24,8 +28,7 @@ export default function ReportFab() {
         </button>
         <span className="report-fab-tooltip">Quick Report</span>
       </div>
-
-      <QuickReportModal open={open} onClose={() => setOpen(false)} />
+      <QuickReportSheet open={open} onClose={() => setOpen(false)} />
     </>
   );
 }
