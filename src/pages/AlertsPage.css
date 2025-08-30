@@ -224,4 +224,30 @@
   .category-item .cat-count {
     top: 12px; /* 行高略不同時微調 */
   }
+  /* Mobile-friendly banner / text wrapping */
+.notice-banner,
+.alert-banner,
+.tray-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #1e3a8a;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* Make summary stat row wrap on small screens */
+.priority-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.priority-stats .priority-item {
+  min-width: 140px;
+}
+
 }
