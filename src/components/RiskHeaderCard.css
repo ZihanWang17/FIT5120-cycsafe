@@ -1,17 +1,13 @@
-/* Styles for the RiskHeaderCard component
- * The card uses a gradient background that changes based on the risk level.
- * The right side shows a large weather emoji and the risk severity label.
- */
-
+/* 整張卡的上半部（薄、滿寬、無外距） */
 .risk-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px;
+  padding: 12px 16px; /* 薄一點 */
   color: #fff;
 }
 
-/* Background colours for each severity */
+/* 動態顏色背景 */
 .risk-header.low {
   background: linear-gradient(90deg, #22c55e, #16a34a);
 }
@@ -22,49 +18,47 @@
   background: linear-gradient(90deg, #ef4444, #b91c1c);
 }
 
-/* Left side containing icon and text */
+/* 左側：icon + 兩行字 */
 .rh-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .rh-icon {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 .rh-icon img,
 .rh-icon svg {
-  width: 100%;
-  height: 100%;
+  width: 18px;
+  height: 18px;
 }
+
 .rh-text h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 14px; /* 小字級 */
+  line-height: 1.1;
   font-weight: 600;
-  line-height: 1.2;
 }
 .rh-text p {
-  margin-top: 4px;
-  font-size: 13px;
+  margin: 2px 0 0 0;
+  font-size: 12px;
   opacity: 0.9;
 }
 
-/* Right side containing weather emoji and severity label */
+/* 右側：只顯示等級膠囊 */
 .rh-right {
   text-align: right;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
 }
-.rh-emoji {
-  font-size: 38px;
-  line-height: 1;
-}
-.rh-severity {
-  margin-top: 4px;
-  font-size: 14px;
-  font-weight: 600;
-  text-transform: capitalize;
+.rh-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px; /* 膠囊 */
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(2px);
+  text-transform: uppercase;
 }

@@ -1,3 +1,4 @@
+// src/pages/AlertsPage.tsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import "./AlertsPage.css";
 import AlertItem from "../components/AlertItem";
@@ -38,27 +39,27 @@ const API =
   import.meta.env.VITE_LAMBDA_URL ??
   "https://dbetjhlyj7smwrgcptcozm6amq0ovept.lambda-url.ap-southeast-2.on.aws/";
 
-const VIC_EVENTS_URL = "https://emergency.vic.gov.au/public/events-geojson.json";
-const VIC_IMPACT_URL = "https://emergency.vic.gov.au/public/impact-areas-geojson.json";
+const VIC_EVENTS_URL  = "https://emergency.vic.gov.au/public/events-geojson.json";
+const VIC_IMPACT_URL  = "https://emergency.vic.gov.au/public/impact-areas-geojson.json";
 
 const FALLBACK = { lat: -37.8136, lon: 144.9631 };
 const ADDRESS_KEY = "cs.address";
-const COORDS_KEY = "cs.coords";
+const COORDS_KEY  = "cs.coords";
 
-// 250 m radius
+// 只顯示 250m 內官方事件
 const NEARBY_M = 250;
 
-// thresholds (m/s; 1 m/s ≈ 3.6 km/h)
-const WIND_MED = 11;
+// 風雨門檻（Open-Meteo 風速 m/s；1 m/s ≈ 3.6 km/h）
+const WIND_MED  = 11;
 const WIND_HIGH = 17;
-const RAIN_MED = 1.0;
+const RAIN_MED  = 1.0;
 const RAIN_HIGH = 3.0;
 
 /* weather helpers */
 function weatherLabelFrom(data?: RiskResp["weather"]) {
   const ws = Number(data?.windSpeed ?? 0);
   const pr = Number(data?.precipitation ?? 0);
-  if (pr >= 1) return "Rainy";
+  if (pr >= 1) return "Rain";
   if (ws >= 12) return "Windy";
   return "Clear";
 }
@@ -71,7 +72,7 @@ function weatherEmoji(text: string) {
   return "☀️";
 }
 
-/* string + time utils */
+/* string utils */
 const stripHtml = (s?: string) => (s ? s.replace(/<[^>]*>/g, "").trim() : "");
 const stringFirst = (...vals: any[]): string => {
   for (const v of vals) {
@@ -104,7 +105,8 @@ function haversineM(lat1: number, lon1: number, lat2: number, lon2: number) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 function pointInsidePolygon(lat: number, lon: number, polygon: number[][]): boolean {
-  let inside = false; // ray casting
+  // ray casting (planar approx good enough for 250m)
+  let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const xi = polygon[i][1], yi = polygon[i][0];
     const xj = polygon[j][1], yj = polygon[j][0];
@@ -115,6 +117,7 @@ function pointInsidePolygon(lat: number, lon: number, polygon: number[][]): bool
   return inside;
 }
 function minDistanceToRingM(lat: number, lon: number, ring: number[][]): number {
+  // min of vertex distances (good enough at small scale)
   let min = Infinity;
   for (const [lng, latp] of ring) {
     const d = haversineM(lat, lon, latp, lng);
@@ -123,6 +126,7 @@ function minDistanceToRingM(lat: number, lon: number, ring: number[][]): number 
   return min;
 }
 function pointToPolygonDistanceM(lat: number, lon: number, coords: number[][][]): number {
+  // coords: [ [ [lng,lat], ... ] , [hole], ... ]
   const outer = coords[0] || [];
   if (pointInsidePolygon(lat, lon, outer)) return 0;
   return minDistanceToRingM(lat, lon, outer);
@@ -142,6 +146,8 @@ function mapPriorityFrom(props: Record<string, any>): Priority {
   if (wl.includes("emergency")) return "HIGH";
   if (wl.includes("watch") || wl.includes("act")) return "MEDIUM";
   if (wl.includes("advice") || wl.includes("information")) return "LOW";
+
+  // fallback: category signals
   const c1 = String(props.category1 || props.category || "").toLowerCase();
   if (c1.includes("fire") || c1.includes("flood")) return "HIGH";
   return "MEDIUM";
@@ -152,18 +158,21 @@ export default function AlertsPage() {
   const [address, setAddress] = useState<string>("");
   const [, setTick] = useState(0);
 
+  // Risk chip
   const [riskLevel, setRiskLevel] = useState<"LOW" | "MED" | "HIGH">("LOW");
   const [weatherText, setWeatherText] = useState<string>("");
 
+  // Modal
   const [openInfo, setOpenInfo] = useState<string | null>(null);
 
+  // Coords
   const coordsRef = useRef<{ lat: number; lon: number }>(FALLBACK);
-  const pollRef = useRef<number | null>(null);
+  const pollRef   = useRef<number | null>(null);
 
   const sanitizeIncidents = (list: AlertModel[]) =>
     (list || []).filter(Boolean).filter(x => x.title || x.description).filter(x => x.timestamp != null);
 
-  /* VIC: events feed */
+  /* ===== VIC: events (points/lines/polygons, we only use Point coordinates here) ===== */
   const fetchVicEvents = useCallback(async (lat: number, lon: number, signal?: AbortSignal) => {
     try {
       const res = await fetch(VIC_EVENTS_URL, { cache: "no-store", signal });
@@ -176,6 +185,7 @@ export default function AlertsPage() {
       for (const f of feats) {
         const p = f?.properties || {};
         const g = f?.geometry || {};
+        // Normalize to a single lon/lat pair (Point only)
         let lonF: number | undefined, latF: number | undefined;
         if (g?.type === "Point" && Array.isArray(g.coordinates)) {
           lonF = Number(g.coordinates[0]); latF = Number(g.coordinates[1]);
@@ -190,9 +200,11 @@ export default function AlertsPage() {
         if (dist > NEARBY_M) continue;
 
         const name = stringFirst(p.title, p.eventName, p.name, p.headline, p.category1, p.category2) || "Official Incident";
-        const descr = stripHtml(stringFirst(p.description, p.info, p.details, p.category2)) || "Official incident reported nearby.";
-        const loc = stringFirst(p.location, p.locality, p.area, `${latF!.toFixed(5)}, ${lonF!.toFixed(5)}`);
-        const ts = toEpoch(stringFirst(p.lastUpdated, p.updated, p.publishDate, p.created));
+        const descr = stripHtml(
+          stringFirst(p.description, p.info, p.details, p.category2)
+        ) || "Official incident reported nearby.";
+        const loc  = stringFirst(p.location, p.locality, p.area, `${latF!.toFixed(5)}, ${lonF!.toFixed(5)}`);
+        const ts   = toEpoch(stringFirst(p.lastUpdated, p.updated, p.publishDate, p.created));
 
         items.push({
           title: name,
@@ -212,7 +224,7 @@ export default function AlertsPage() {
     }
   }, []);
 
-  /* VIC: impact areas feed */
+  /* ===== VIC: impact areas (Polygon/MultiPolygon) ===== */
   const fetchVicImpactAreas = useCallback(async (lat: number, lon: number, signal?: AbortSignal) => {
     try {
       const res = await fetch(VIC_IMPACT_URL, { cache: "no-store", signal });
@@ -260,7 +272,7 @@ export default function AlertsPage() {
     }
   }, [address]);
 
-  /* Combined poll (risk + VIC feeds) */
+  /** 取 alerts + risk chip synchronised with current coords */
   const fetchAlerts = useCallback(async (lat: number, lon: number, signal?: AbortSignal) => {
     const collected: AlertModel[] = [];
     try {
@@ -280,13 +292,12 @@ export default function AlertsPage() {
         window.dispatchEvent(new CustomEvent("cs:address", { detail: addr }));
       } catch {}
 
-      // unify risk between Home and Alerts
+      // Risk chip (must match Home)
       const wxText = weatherLabelFrom(data.weather);
       setWeatherText(wxText);
-      const wxCode: 1 | 2 | 7 =
+      const wxCode: 1|2|7 =
         Number(data.weather?.windSpeed ?? 0) >= 12 ? 7 :
         Number(data.weather?.precipitation ?? 0) >= 1 ? 2 : 1;
-
       const now = new Date();
       const risk = computeRiskLevel({
         lat, lon,
@@ -297,7 +308,8 @@ export default function AlertsPage() {
       });
       setRiskLevel(risk.riskLevel);
 
-      const ws = Number(data.weather?.windSpeed ?? 0);
+      // Weather card(s)
+      const ws   = Number(data.weather?.windSpeed ?? 0);
       const rain = Number(data.weather?.precipitation ?? 0);
       if (ws >= WIND_HIGH || rain >= RAIN_HIGH) {
         collected.push({
@@ -319,9 +331,12 @@ export default function AlertsPage() {
         });
       }
     } catch (e: any) {
-      if (e?.name !== "AbortError") setAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+      if (e?.name === "AbortError") return;
+      console.error("risk/weather fetch failed:", e);
+      setAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
     }
 
+    // Official incidents from BOTH feeds, within 250 m
     const [events, impacts] = await Promise.all([
       fetchVicEvents(lat, lon, signal),
       fetchVicImpactAreas(lat, lon, signal),
@@ -344,13 +359,15 @@ export default function AlertsPage() {
     } catch {}
   }, [fetchVicEvents, fetchVicImpactAreas]);
 
-  // init
+  /** 初始化：讀取現有座標（Home 已經會存），沒有就 fallback；立刻抓一次 */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(COORDS_KEY);
       if (saved) {
         const { lat, lon } = JSON.parse(saved);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) coordsRef.current = { lat, lon };
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          coordsRef.current = { lat, lon };
+        }
       }
     } catch {}
     const ac = new AbortController();
@@ -358,7 +375,7 @@ export default function AlertsPage() {
     return () => ac.abort();
   }, [fetchAlerts]);
 
-  // react to coords bus from Home
+  /** Home → coords bus */
   useEffect(() => {
     const onCoords = (e: Event) => {
       const d = (e as CustomEvent).detail as { lat?: number; lon?: number } | undefined;
@@ -372,21 +389,23 @@ export default function AlertsPage() {
     return () => window.removeEventListener("cs:coords", onCoords);
   }, [fetchAlerts]);
 
-  // poll & ticking relative time
+  /** Visible polling each 60s; refresh on focus/visibility */
   useEffect(() => {
     const poll = () => {
       if (document.visibilityState !== "visible") return;
       const ac = new AbortController();
       fetchAlerts(coordsRef.current.lat, coordsRef.current.lon, ac.signal);
     };
+
     const onVis = () => { if (document.visibilityState === "visible") poll(); };
     const onFocus = () => poll();
 
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", onFocus);
 
-    pollRef.current = window.setInterval(poll, 60_000);
-    const tickId = window.setInterval(() => setTick((v) => v + 1), 60_000);
+    pollRef.current = window.setInterval(poll, 60 * 1000);
+    const tickId = window.setInterval(() => setTick(v => v + 1), 60_000);
+
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("focus", onFocus);
@@ -395,24 +414,28 @@ export default function AlertsPage() {
     };
   }, [fetchAlerts]);
 
+  // Summary counts
   const { critical, high, medium, low } = useMemo(() => {
     return {
       critical: alerts.filter((a) => a.priority === "CRITICAL").length,
-      high: alerts.filter((a) => a.priority === "HIGH").length,
-      medium: alerts.filter((a) => a.priority === "MEDIUM").length,
-      low: alerts.filter((a) => a.priority === "LOW").length,
+      high:     alerts.filter((a) => a.priority === "HIGH").length,
+      medium:   alerts.filter((a) => a.priority === "MEDIUM").length,
+      low:      alerts.filter((a) => a.priority === "LOW").length,
     };
   }, [alerts]);
 
+  // Category counts
   const categoryCounts = useMemo(() => {
     return {
       WEATHER: alerts.filter((a) => a.category === "WEATHER").length,
       TRAFFIC: alerts.filter((a) => a.category === "TRAFFIC").length,
-      INFRA: alerts.filter((a) => a.category === "INFRA").length,
-      SAFETY: alerts.filter((a) => a.category === "SAFETY").length,
-      INCIDENT: alerts.filter((a) => a.category === "INCIDENT").length,
+      INFRA:   alerts.filter((a) => a.category === "INFRA").length,
+      SAFETY:  alerts.filter((a) => a.category === "SAFETY").length,
+      INCIDENT:alerts.filter((a) => a.category === "INCIDENT").length,
     };
   }, [alerts]);
+
+  const hasLocation = !!coordsRef.current;
 
   const weatherChip = weatherText ? (
     <div
@@ -425,7 +448,7 @@ export default function AlertsPage() {
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,.08)",
         background: "rgba(255,255,255,.6)",
-        backdropFilter: "blur(2px)",
+        backdropFilter: "blur(2px)"
       }}
     >
       <span>{weatherEmoji(weatherText)}</span>
@@ -448,7 +471,7 @@ export default function AlertsPage() {
         </div>
       </section>
 
-      {/* Current risk (consistent with Home) */}
+      {/* Current Risk card */}
       <section style={{ marginTop: 8 }}>
         <div
           style={{
@@ -458,18 +481,21 @@ export default function AlertsPage() {
             padding: "12px 14px",
             borderRadius: 12,
             background: "#f8fafc",
-            border: "1px solid #e2e8f0",
+            border: "1px solid #e2e8f0"
           }}
         >
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Current Risk</div>
             {weatherChip}
-            <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>Based on local time & weather</div>
+            <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>
+              Based on local time & weather
+            </div>
           </div>
           <div className={`risk-pill ${riskLevel.toLowerCase()}`}>{riskLevel}</div>
         </div>
       </section>
 
+      {/* Empty */}
       {alerts.length === 0 && (
         <section className="alerts-categories">
           <h3>Alert Categories</h3>
@@ -485,12 +511,14 @@ export default function AlertsPage() {
               <em className="cat-count">{categoryCounts.INCIDENT}</em>
             </div>
           </div>
+
           <div style={{ marginTop: "1rem", padding: ".8rem 1rem", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontWeight: 700 }}>
-            Location unavailable. Enable location services to show nearby incidents.
+            {hasLocation ? "No active alerts nearby." : "Location unavailable. Enable location services to show nearby incidents."}
           </div>
         </section>
       )}
 
+      {/* List */}
       {alerts.length > 0 && (
         <section className="alerts-list">
           {alerts.map((a, idx) => (
@@ -507,6 +535,7 @@ export default function AlertsPage() {
         </section>
       )}
 
+      {/* Categories footer */}
       <section className="alerts-categories">
         <h3>Alert Categories</h3>
         <div className="category-list">
@@ -533,7 +562,7 @@ export default function AlertsPage() {
         </div>
       </section>
 
-      {/* Incident details modal */}
+      {/* Incident detail modal */}
       <Dialog open={!!openInfo} onClose={() => setOpenInfo(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Incident Details</DialogTitle>
         <DialogContent dividers>
